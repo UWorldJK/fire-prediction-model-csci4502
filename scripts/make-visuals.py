@@ -11,7 +11,7 @@ from rasterio.features import rasterize
 from rasterio.plot import plotting_extent
 
 REPO = Path(__file__).resolve().parent.parent
-RAW = Path(__file__).resolve().parent / "data" / "raw" 
+RAW = REPO / "data" / "raw" 
 FIGS = REPO / "figures"
 
 # Scott & Burgan 40 fuel model codes (FBFM40) grouped by fuel type
