@@ -1,15 +1,3 @@
-"""
-Exploratory visuals for the raw fire data.
-
-Reads:
-  data/raw/mtbs_*.gpkg          MTBS fire perimeters (from download_mtbs)
-  data/raw/landfire_*/**/*.tif  LANDFIRE elevation, slope, fuel model (from download_landfire)
-
-Writes PNGs to figures/ at the repo root.
-
-Run from anywhere:  py scripts/make_visuals.py
-"""
-
 from pathlib import Path
 
 import geopandas as gpd
@@ -40,7 +28,7 @@ MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 
-# ---------------------------------------------------------------- loading
+# loading
 
 def load_mtbs():
     """Load the most recent MTBS GeoPackage written by download_raw_data.py."""
