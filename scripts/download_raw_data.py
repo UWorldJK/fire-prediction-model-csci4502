@@ -231,5 +231,5 @@ class FireData:
 if __name__ == "__main__":
     data = FireData()
     data.download_gridmet("2020-01-01", "2020-12-31", "east")
-    data.download_landfire("east")
+    #data.download_landfire("east")
     data.download_mtbs(2020, 2020, "east")
