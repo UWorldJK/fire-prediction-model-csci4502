@@ -12,3 +12,4 @@ from lakehouse.read import (  # noqa: F401
     read_mtbs,
     read_silver,
 )
+from lakehouse.write import write_silver, write_zarr  # noqa: F401,E402
