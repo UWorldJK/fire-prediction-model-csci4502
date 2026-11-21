@@ -211,3 +211,36 @@ def integrated_cc_three_versions(cc_three_versions):
     from ingest.integrate import integrate_landfire
 
     integrate_landfire(["LF2016_CC", "LF2022_CC", "LF2024_CC"])
+
+
+# ---------- viewer ----------
+
+@pytest.fixture
+def viewer_data():
+    import pandas as pd
+
+    from lakehouse.manifest import ManifestRecord
+    from lakehouse.viewer import ViewerData
+
+    rec = lambda src, key, url, n: ManifestRecord(  # noqa: E731
+        src, key, url, "a" * 64, n, "2026-11-21T00:00:00Z", [-125.0, 31.0, -102.0, 49.5], "{}", "deadbeef"
+    )
+    return ViewerData(
+        bucket="test-lake",
+        region="us-east-1",
+        study_years=range(2019, 2021),
+        generated_at="2026-11-21T00:00:00Z",
+        git_sha="deadbeef",
+        manifests=[
+            rec("gridmet", "bronze/gridmet/variable=tmmx/year=2020/tmmx_2020_west.nc",
+                "https://www.northwestknowledge.net/metdata/data/tmmx_2020.nc", 1_000_000),
+            rec("mtbs", "bronze/mtbs/snapshot=2026-11-21/mtbs_perimeters_west.parquet",
+                "https://edcintl.cr.usgs.gov/x.zip", 2_000_000),
+        ],
+        gridmet_raw={("tmmx", 2019), ("tmmx", 2020), ("erc", 2020)},
+        gridmet_integrated={"tmmx": (2019, 2020)},
+        mtbs_counts=pd.DataFrame({"Wildfire": [3, 5], "Prescribed Fire": [1, 0]}, index=[2019, 2020]),
+        landfire_tiles={("topo", "r0c0"), ("topo", "r0c1"), ("topo", "r1c0")},
+        landfire_integrated={"LF2020_Elev"},
+        silver_tables=["silver_cell_year_features"],
+    )
