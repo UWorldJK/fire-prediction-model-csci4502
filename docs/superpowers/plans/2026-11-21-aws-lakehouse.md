@@ -55,7 +55,7 @@ s3://fire-lakehouse-<account-id>/
   bronze/
     gridmet/variable={var}/year={year}/{var}_{year}_west.nc
     mtbs/snapshot={YYYY-MM-DD}/mtbs_perimeters_west.parquet        # GeoParquet, EPSG:4269
-    mtbs/snapshot={YYYY-MM-DD}/mtbs_perims_DD_metadata.xml
+    mtbs/snapshot={YYYY-MM-DD}/_mtbs_perims_DD_metadata.xml   # leading _ so Athena skips it
     landfire/group={group}/tile={tile_id}/{lfps_original_filename}
     integrated/gridmet/{var}.zarr/                                 # all years, raw packed values
     integrated/mtbs/mtbs_perimeters_west.parquet                   # all snapshots, deduped

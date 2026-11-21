@@ -26,7 +26,7 @@ def test_ingest_mtbs_writes_geoparquet_and_metadata(lake_bucket, mocker, mtbs_zi
     res = ingest_mtbs(snapshot="2026-11-21")
     pq_key = mtbs_key("2026-11-21", "mtbs_perimeters_west.parquet")
     assert s3.object_exists(pq_key)
-    assert s3.object_exists(mtbs_key("2026-11-21", "mtbs_perims_DD_metadata.xml"))
+    assert s3.object_exists(mtbs_key("2026-11-21", "_mtbs_perims_DD_metadata.xml"))
     assert len(res.records) == 2 and res.failed == []
     back = gpd.read_parquet(s3.download_file(pq_key))
     # lake_bucket study years are 2019-2020: CO 2019 and UT 2020 stay, FL is east, CA is 1999

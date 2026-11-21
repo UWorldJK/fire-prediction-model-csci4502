@@ -30,6 +30,8 @@ MTBS_URL = (
 )
 PARQUET_NAME = "mtbs_perimeters_west.parquet"
 METADATA_NAME = "mtbs_perims_DD_metadata.xml"
+# Leading underscore: Athena/Hive skip it when reading the Parquet table in this folder.
+METADATA_KEY_NAME = "_" + METADATA_NAME
 
 
 def filter_mtbs(gdf: gpd.GeoDataFrame, years, bbox=config.WEST_BBOX) -> gpd.GeoDataFrame:
@@ -63,7 +65,7 @@ def ingest_mtbs(snapshot: str | None = None, force: bool = False) -> IngestResul
             uploads = [(out, pq_key, "application/vnd.apache.parquet")]
             meta = next((tmp / "src").rglob(METADATA_NAME), None)
             if meta is not None:
-                uploads.append((meta, config.mtbs_key(snapshot, METADATA_NAME), "application/xml"))
+                uploads.append((meta, config.mtbs_key(snapshot, METADATA_KEY_NAME), "application/xml"))
             params = json.dumps(
                 {"snapshot": snapshot, "years": [years.start, years.stop - 1], "fires": len(west)}
             )
