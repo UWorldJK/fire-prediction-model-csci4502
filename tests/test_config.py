@@ -53,4 +53,4 @@ def test_constants_match_design():
     assert config.WEST_BBOX == (-125.0, 31.0, -102.0, 49.5)
     assert len(config.GRIDMET_VARS) == 13
     assert config.LANDFIRE_RESOLUTION_M == 90
-    assert config.REGION == "us-west-2"
+    assert config.REGION == "us-east-1"

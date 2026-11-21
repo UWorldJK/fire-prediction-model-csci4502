@@ -32,7 +32,7 @@ LANDFIRE_RESOLUTION_M = 90
 LANDFIRE_TILE_DEG = 5.0
 
 # --- AWS resources (created by infra/lakehouse.yaml) ---
-REGION = "us-west-2"
+REGION = "us-east-1"
 DATABASE = "fire_lakehouse"
 WORKGROUP = "fire-lakehouse"
 STACK_NAME = "fire-lakehouse"

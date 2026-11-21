@@ -20,7 +20,7 @@ def moto_endpoint():
             "AWS_ACCESS_KEY_ID": "testing",
             "AWS_SECRET_ACCESS_KEY": "testing",
             "AWS_SESSION_TOKEN": "testing",
-            "AWS_DEFAULT_REGION": "us-west-2",
+            "AWS_DEFAULT_REGION": "us-east-1",
         }
     )
     os.environ.pop("AWS_PROFILE", None)
@@ -46,10 +46,8 @@ _AWS_ENV = (
 @pytest.fixture
 def lake_bucket(moto_endpoint, monkeypatch, tmp_path):
     """Fresh, empty bucket `test-lake` with study years 2019-2020."""
-    s3 = boto3.client("s3", endpoint_url=moto_endpoint, region_name="us-west-2")
-    s3.create_bucket(
-        Bucket="test-lake", CreateBucketConfiguration={"LocationConstraint": "us-west-2"}
-    )
+    s3 = boto3.client("s3", endpoint_url=moto_endpoint, region_name="us-east-1")
+    s3.create_bucket(Bucket="test-lake")  # us-east-1 takes no LocationConstraint
     monkeypatch.setenv("FIRE_LAKEHOUSE_BUCKET", "test-lake")
     monkeypatch.setenv("STUDY_START_YEAR", "2019")
     monkeypatch.setenv("STUDY_END_YEAR", "2020")
