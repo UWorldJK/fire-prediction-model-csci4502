@@ -40,11 +40,23 @@ def _download_raw(key: str, dest: Path) -> None:
     part.replace(dest)
 
 
-def download_file(key: str, refresh: bool = False) -> Path:
-    """Download an object to the local cache (once) and return its path."""
+def download_file(key: str, refresh: bool = False, revalidate: bool = False) -> Path:
+    """Download an object to the local cache (once) and return its path.
+
+    refresh: always re-download. revalidate: re-download only if the object's ETag
+    changed since the cached copy (for objects that get rebuilt, e.g. integrated files).
+    """
     dest = config.cache_dir() / config.bucket() / key
+    etag_file = dest.with_name(dest.name + ".etag")
+    etag = None
+    if revalidate:
+        etag = config.client("s3").head_object(Bucket=config.bucket(), Key=key)["ETag"]
+        if dest.exists() and (not etag_file.exists() or etag_file.read_text() != etag):
+            refresh = True
     if refresh or not dest.exists():
         _download_raw(key, dest)
+        if etag:
+            etag_file.write_text(etag)
     return dest
 
 

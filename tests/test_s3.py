@@ -61,3 +61,13 @@ def test_http_error_raises(tmp_path, requests_mock):
     with pytest.raises(requests.HTTPError):
         s3.stream_download("https://x/missing.nc", tmp_path / "m.nc")
     assert not (tmp_path / "m.nc").exists()
+
+
+def test_download_revalidate_picks_up_change(lake_bucket, tmp_path):
+    p = tmp_path / "x.txt"
+    p.write_text("v1")
+    s3.upload_file(p, "bronze/integrated/x")
+    assert s3.download_file("bronze/integrated/x", revalidate=True).read_text() == "v1"
+    p.write_text("v2")
+    s3.upload_file(p, "bronze/integrated/x")
+    assert s3.download_file("bronze/integrated/x", revalidate=True).read_text() == "v2"

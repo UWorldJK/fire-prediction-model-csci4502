@@ -191,3 +191,23 @@ def cc_three_versions(lake_bucket, tmp_path):
         descs = tuple(f"{name}_CONUS" for name in LANDFIRE_GROUPS[group])
         tif = _write_tile(tmp_path / f"{group}.tif", -2000000.0, 2000000.0, 4, 3, 10 * i, descs)
         s3.upload_file(tif, landfire_key(group, "r0c0", f"{group}.tif"))
+
+
+# ---------- integrated fixtures (built with the real integrate functions) ----------
+
+@pytest.fixture
+def integrated_tmmx_2019_2020(lake_bucket, synthetic_gridmet_factory):
+    from ingest.integrate import integrate_gridmet
+    from lakehouse import s3
+    from lakehouse.config import gridmet_key
+
+    for year in (2019, 2020):
+        s3.upload_file(synthetic_gridmet_factory(year), gridmet_key("tmmx", year))
+    integrate_gridmet(["tmmx"], [2019, 2020])
+
+
+@pytest.fixture
+def integrated_cc_three_versions(cc_three_versions):
+    from ingest.integrate import integrate_landfire
+
+    integrate_landfire(["LF2016_CC", "LF2022_CC", "LF2024_CC"])
