@@ -5,13 +5,14 @@ the `fire-lakehouse` CloudFormation stack, then the defaults below.
 """
 from __future__ import annotations
 
-import functools
 import math
 import os
 from pathlib import Path
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
+
+from lakehouse.errors import LakehouseAuthError
 
 # --- region of interest and data selection (Design Decisions D1-D6) ---
 WEST_BBOX: tuple[float, float, float, float] = (-125.0, 31.0, -102.0, 49.5)  # W, S, E, N (EPSG:4326)
@@ -61,14 +62,23 @@ def s3fs_options() -> dict:
     return {"client_kwargs": kwargs}
 
 
-@functools.cache
+_STACK_OUTPUTS_CACHE: dict[str, str] = {}
+
+
 def stack_outputs() -> dict[str, str]:
-    """Outputs of the fire-lakehouse stack, or {} when it cannot be reached."""
+    """Outputs of the fire-lakehouse stack, or {} when it cannot be reached.
+
+    Only a successful lookup is cached, so fixing AWS_PROFILE mid-notebook works
+    without restarting the kernel.
+    """
+    if _STACK_OUTPUTS_CACHE:
+        return dict(_STACK_OUTPUTS_CACHE)
     try:
         stacks = client("cloudformation").describe_stacks(StackName=STACK_NAME)["Stacks"]
     except (ClientError, BotoCoreError):
         return {}
-    return {o["OutputKey"]: o["OutputValue"] for o in stacks[0].get("Outputs", [])}
+    _STACK_OUTPUTS_CACHE.update({o["OutputKey"]: o["OutputValue"] for o in stacks[0].get("Outputs", [])})
+    return dict(_STACK_OUTPUTS_CACHE)
 
 
 def _setting(env: str, output: str, default: str | None) -> str | None:
@@ -80,9 +90,9 @@ def _setting(env: str, output: str, default: str | None) -> str | None:
 def bucket() -> str:
     name = _setting("FIRE_LAKEHOUSE_BUCKET", "BucketName", None)
     if not name:
-        raise RuntimeError(
-            "Lakehouse bucket unknown: set FIRE_LAKEHOUSE_BUCKET or AWS_PROFILE=fire-lakehouse "
-            "(see docs/lakehouse.md)."
+        raise LakehouseAuthError(
+            "Lakehouse bucket unknown: AWS credentials are missing, expired, or for the wrong account. "
+            "Set AWS_PROFILE=fire-lakehouse (see docs/lakehouse.md)."
         )
     return name
 

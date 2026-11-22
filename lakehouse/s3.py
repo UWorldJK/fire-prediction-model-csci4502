@@ -28,8 +28,13 @@ def list_keys(prefix: str) -> list[str]:
     return sorted(keys)
 
 
-def upload_file(path: Path, key: str, content_type: str | None = None) -> None:
-    extra = {"ContentType": content_type} if content_type else None
+def upload_file(path: Path, key: str, content_type: str | None = None, metadata: dict | None = None) -> None:
+    extra = {}
+    if content_type:
+        extra["ContentType"] = content_type
+    if metadata:
+        extra["Metadata"] = metadata
+    extra = extra or None
     config.client("s3").upload_file(str(path), config.bucket(), key, ExtraArgs=extra)
 
 

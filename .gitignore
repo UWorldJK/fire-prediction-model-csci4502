@@ -2,3 +2,5 @@ data/*
 ipynb_checkpoints
 .venv/
 .cache/
+GIT_SHA
+__pycache__/

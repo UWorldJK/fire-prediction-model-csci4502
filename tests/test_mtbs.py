@@ -37,8 +37,21 @@ def test_ingest_mtbs_writes_geoparquet_and_metadata(lake_bucket, mocker, mtbs_zi
 def test_ingest_mtbs_skips_existing_snapshot(lake_bucket, tmp_path, mocker):
     p = tmp_path / "x"
     p.write_bytes(b"")
-    s3.upload_file(p, mtbs_key("2026-11-21", "mtbs_perimeters_west.parquet"))
+    s3.upload_file(p, mtbs_key("2026-11-21", "mtbs_perimeters_west.parquet"),
+                   metadata={"study-years": "2019-2020"})
     dl = mocker.patch("ingest.mtbs.stream_download")
     res = ingest_mtbs(snapshot="2026-11-21")
     dl.assert_not_called()
     assert res.skipped == [mtbs_key("2026-11-21", "mtbs_perimeters_west.parquet")]
+
+
+def test_ingest_mtbs_redoes_same_day_snapshot_when_study_years_grow(lake_bucket, tmp_path, mocker, mtbs_zip):
+    """Moving StudyStartYear earlier and re-running the same day must pick up the older fires."""
+    p = tmp_path / "x"
+    p.write_bytes(b"")
+    s3.upload_file(p, mtbs_key("2026-11-21", "mtbs_perimeters_west.parquet"),
+                   metadata={"study-years": "2020-2020"})
+    dl = mocker.patch("ingest.mtbs.stream_download", side_effect=lambda url, dest, **k: shutil.copy(mtbs_zip, dest) and dest)
+    res = ingest_mtbs(snapshot="2026-11-21")
+    dl.assert_called_once()
+    assert res.skipped == [] and res.failed == []

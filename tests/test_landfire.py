@@ -17,13 +17,14 @@ def test_make_tiles_covers_bbox():
     assert ("r3c4", (-105.0, 46.0, -102.0, 49.5)) in tiles
 
 
-def test_job_payload_native_crs():
+def test_job_payload_requests_conus_albers():
     p = job_payload(["LF2020_Elev", "LF2020_SlpD"], (-125.0, 31.0, -120.0, 36.0), 90, "e@x")
     assert p["Layer_List"] == "LF2020_Elev;LF2020_SlpD"
     assert p["Area_of_Interest"] == "-125.0 31.0 -120.0 36.0"
     assert p["Resample_Resolution"] == 90
     assert p["Email"] == "e@x"
-    assert "Output_Projection" not in p
+    # Without it LFPS returns a custom Albers centered on each tile, so tiles cannot be mosaicked.
+    assert p["Output_Projection"] == "5070"
 
 
 def test_run_lfps_job_returns_output_url(requests_mock):

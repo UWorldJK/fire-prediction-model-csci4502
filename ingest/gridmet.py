@@ -65,6 +65,7 @@ def ingest_gridmet(variables=None, years=None, force: bool = False) -> IngestRes
                             params=json.dumps({"variable": var, "year": year}), git_sha=sha,
                         )
                     )
+                write_manifest(result.records, "gridmet", run_id)
                 log.info("gridmet %s %s uploaded", var, year)
             except Exception as err:  # keep going; report at the end
                 log.warning("gridmet %s %s failed: %s", var, year, err)

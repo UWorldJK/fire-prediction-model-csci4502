@@ -1,3 +1,5 @@
+import pytest
+
 from lakehouse import config
 
 
@@ -54,3 +56,27 @@ def test_constants_match_design():
     assert len(config.GRIDMET_VARS) == 13
     assert config.LANDFIRE_RESOLUTION_M == 90
     assert config.REGION == "us-east-1"
+
+
+def test_bucket_without_profile_raises_auth_error(monkeypatch):
+    from lakehouse.errors import LakehouseAuthError
+
+    monkeypatch.delenv("FIRE_LAKEHOUSE_BUCKET", raising=False)
+    monkeypatch.setattr(config, "stack_outputs", lambda: {})
+    with pytest.raises(LakehouseAuthError, match="AWS_PROFILE=fire-lakehouse"):
+        config.bucket()
+
+
+def test_failed_stack_lookup_is_not_cached(monkeypatch, mocker):
+    import botocore.exceptions
+
+    config._STACK_OUTPUTS_CACHE.clear()
+    cf = mocker.Mock()
+    cf.describe_stacks.side_effect = [
+        botocore.exceptions.NoCredentialsError(),
+        {"Stacks": [{"Outputs": [{"OutputKey": "BucketName", "OutputValue": "lake"}]}]},
+    ]
+    mocker.patch.object(config, "client", return_value=cf)
+    assert config.stack_outputs() == {}
+    assert config.stack_outputs() == {"BucketName": "lake"}
+    config._STACK_OUTPUTS_CACHE.clear()

@@ -31,7 +31,7 @@ MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
 # loading
 
 def load_mtbs():
-    """Load the most recent MTBS GeoPackage written by download_raw_data.py."""
+    """Load the most recent local MTBS GeoPackage (legacy; new code reads the lake: docs/lakehouse.md)."""
     files = sorted(RAW.glob("mtbs_*.gpkg"))
     if not files:
         return None
@@ -270,7 +270,7 @@ def main():
     gdf = load_mtbs()
     layers = load_landfire()
     if gdf is None and not layers:
-        print(f"No data found in {RAW}. Run download_raw_data.py first.")
+        print(f"No data found in {RAW}. Local downloads are retired; read from the lake instead (docs/lakehouse.md).")
         return
 
     if gdf is not None:

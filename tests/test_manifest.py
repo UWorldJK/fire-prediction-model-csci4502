@@ -24,3 +24,13 @@ def test_empty_manifest_not_written(lake_bucket):
 
 def test_run_id_format():
     assert re.fullmatch(r"\d{8}T\d{6}Z", new_run_id())
+
+
+def test_git_sha_falls_back_to_bundled_file(monkeypatch, tmp_path, mocker):
+    from lakehouse import manifest
+
+    monkeypatch.delenv("GIT_SHA", raising=False)
+    mocker.patch("lakehouse.manifest.subprocess.run", side_effect=OSError("no git"))
+    (tmp_path / "GIT_SHA").write_text("abc1234\n")
+    monkeypatch.setattr(manifest, "_BUNDLE_SHA_FILE", tmp_path / "GIT_SHA")
+    assert manifest.git_sha() == "abc1234"

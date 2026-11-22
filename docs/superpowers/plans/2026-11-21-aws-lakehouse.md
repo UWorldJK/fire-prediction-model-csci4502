@@ -28,7 +28,7 @@ Everything is serverless:
 | D3 | gridMET years | `range(StudyStartYear - 1, StudyEndYear + 1)`. The extra year gives January fires their 30-day lookback. |
 | D4 | gridMET variables | `["pr", "tmmx", "tmmn", "rmax", "rmin", "vs", "th", "srad", "vpd", "erc", "bi", "fm100", "fm1000"]` from `https://www.northwestknowledge.net/metdata/data/{var}_{year}.nc` |
 | D5 | MTBS | Composite perimeter zip (URL in `scripts/download_raw_data.py`). Keep fires whose `ig_date` year is in the study years and whose geometry intersects `WEST_BBOX`. Keep all `incid_type` values. |
-| D6 | LANDFIRE | LFPS API `https://lfps.usgs.gov/api/job` with the layer groups below. 90 m resolution, native CRS (omit `Output_Projection`), tiles of 5.0° (20 tiles). LANDFIRE versions are fixed; they don't follow the study years. |
+| D6 | LANDFIRE | LFPS API `https://lfps.usgs.gov/api/job` with the layer groups below. 90 m resolution, CONUS Albers EPSG:5070 (`Output_Projection=5070`; omitting it yields a per-request custom Albers), tiles of 5.0° (20 tiles). LANDFIRE versions are fixed; they don't follow the study years. |
 | D7 | Bronze is raw | Bronze changes only the spatial and temporal subset and the compression. Source variables, raw stored values (gridMET packed ints with `scale_factor`), units, CRS and columns are unchanged. `bronze/integrated/` follows the same rule; it only concatenates or mosaics. |
 | D8 | Integration (combine all years) | gridMET: one Zarr store per variable, all years on `day`. MTBS: union of all snapshots, deduplicated on `event_id`, latest snapshot wins. LANDFIRE: one Cloud-Optimized GeoTIFF per layer, mosaicked from tiles, plus a reader that stacks fuel versions on a `version` dimension. Integration stores can be rebuilt from bronze raw at any time. |
 | D9 | Layers | Two only, **bronze** (ingest/integrate) and **silver** (cleaning teammate). No gold, no Iceberg. Silver tables are partitioned Parquet registered in Glue, and gridded silver is Zarr. |
@@ -416,7 +416,7 @@ def test_make_tiles_covers_bbox():
 def test_job_payload_native_crs():
     p = job_payload(["LF2020_Elev", "LF2020_SlpD"], (-125.0, 31.0, -120.0, 36.0), 90, "e@x")
     assert p["Layer_List"] == "LF2020_Elev;LF2020_SlpD" and p["Area_of_Interest"] == "-125.0 31.0 -120.0 36.0"
-    assert p["Resample_Resolution"] == 90 and "Output_Projection" not in p
+    assert p["Resample_Resolution"] == 90 and p["Output_Projection"] == "5070"
 
 def test_run_lfps_job_raises_on_failure(requests_mock):
     requests_mock.post(f"{LFPS_URL}/submit", json={"jobId": "j1"})

@@ -53,3 +53,23 @@ def test_register_catalog_runs_sql_and_registers_parquet(mocker, monkeypatch):
         "bronze_mtbs_perimeters": "s3://b/bronze/mtbs/",
         "bronze_mtbs_integrated": "s3://b/bronze/integrated/mtbs/",
     }
+
+
+def test_catalog_creates_manifest_table_before_inventory_view(mocker, monkeypatch):
+    from ingest import catalog
+
+    monkeypatch.setenv("FIRE_LAKEHOUSE_BUCKET", "b")
+    q = mocker.patch("ingest.catalog.wr.athena.start_query_execution")
+    mocker.patch("ingest.catalog.wr.s3.store_parquet_metadata")
+    mocker.patch("ingest.catalog.s3.list_keys", return_value=[])
+    catalog.register_catalog()
+    sqls = [c.args[0] for c in q.call_args_list]
+    table = next(i for i, s in enumerate(sqls) if "CREATE EXTERNAL TABLE IF NOT EXISTS bronze_manifest" in s)
+    view = next(i for i, s in enumerate(sqls) if "CREATE OR REPLACE VIEW bronze_inventory" in s)
+    assert table < view
+
+
+def test_cli_integrate_force_is_passed_through(mocker):
+    m = mocker.patch("ingest.__main__.integrate_all", side_effect=_ok)
+    main(["integrate", "--force"])
+    assert m.call_args.kwargs["force"] is True

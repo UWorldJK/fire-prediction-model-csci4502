@@ -36,7 +36,7 @@ def _step(name: str, args):
         groups = {only: LANDFIRE_GROUPS[only]} if only else None
         return ingest_landfire(groups=groups, force=args.force)
     if name == "integrate":
-        return integrate_all()
+        return integrate_all(force=args.force)
     if name == "catalog":
         return register_catalog()
     if name == "viewer":

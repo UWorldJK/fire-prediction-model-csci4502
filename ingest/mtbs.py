@@ -15,6 +15,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
+from botocore.exceptions import ClientError
 from shapely.geometry import box
 
 from ingest import IngestResult
@@ -42,15 +43,35 @@ def filter_mtbs(gdf: gpd.GeoDataFrame, years, bbox=config.WEST_BBOX) -> gpd.GeoD
     return gdf[in_years & in_bbox]
 
 
+def _years_tag(years: range) -> str:
+    return f"{years.start}-{years.stop - 1}"
+
+
+def _snapshot_covers(key: str, years: range) -> bool:
+    """True if `key` exists and was cut for (at least) these study years."""
+    try:
+        head = config.client("s3").head_object(Bucket=config.bucket(), Key=key)
+    except ClientError as err:
+        if err.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
+            return False
+        raise
+    tag = head.get("Metadata", {}).get("study-years", "")
+    try:
+        start, end = (int(x) for x in tag.split("-"))
+    except ValueError:
+        return False
+    return start <= years.start and end >= years.stop - 1
+
+
 def ingest_mtbs(snapshot: str | None = None, force: bool = False) -> IngestResult:
     snapshot = snapshot or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     pq_key = config.mtbs_key(snapshot, PARQUET_NAME)
     result = IngestResult()
-    if not force and s3.object_exists(pq_key):
+    years = config.study_years()
+    if not force and _snapshot_covers(pq_key, years):
         result.skipped.append(pq_key)
         return result
 
-    years = config.study_years()
     sha = git_sha()
     try:
         with tempfile.TemporaryDirectory() as tmp:
@@ -59,18 +80,20 @@ def ingest_mtbs(snapshot: str | None = None, force: bool = False) -> IngestResul
             with zipfile.ZipFile(zpath) as z:
                 z.extractall(tmp / "src")
             shp = next((tmp / "src").rglob("*.shp"))
-            west = filter_mtbs(gpd.read_file(shp), years)
+            # bbox prefilter at read time keeps memory low (the US-wide file does not fit in 3 GB);
+            # filter_mtbs still does the exact intersection and year test.
+            west = filter_mtbs(gpd.read_file(shp, bbox=config.WEST_BBOX), years)
             out = tmp / PARQUET_NAME
             west.to_parquet(out)
-            uploads = [(out, pq_key, "application/vnd.apache.parquet")]
+            uploads = [(out, pq_key, "application/vnd.apache.parquet", {"study-years": _years_tag(years)})]
             meta = next((tmp / "src").rglob(METADATA_NAME), None)
             if meta is not None:
-                uploads.append((meta, config.mtbs_key(snapshot, METADATA_KEY_NAME), "application/xml"))
+                uploads.append((meta, config.mtbs_key(snapshot, METADATA_KEY_NAME), "application/xml", None))
             params = json.dumps(
                 {"snapshot": snapshot, "years": [years.start, years.stop - 1], "fires": len(west)}
             )
-            for path, key, ctype in uploads:
-                s3.upload_file(path, key, content_type=ctype)
+            for path, key, ctype, metadata in uploads:
+                s3.upload_file(path, key, content_type=ctype, metadata=metadata)
                 result.records.append(
                     ManifestRecord(
                         source="mtbs", s3_key=key, source_url=MTBS_URL, sha256=s3.sha256_file(path),

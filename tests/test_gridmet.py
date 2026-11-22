@@ -69,3 +69,22 @@ def test_ingest_gridmet_continues_after_http_error(lake_bucket, synthetic_gridme
     assert len(res.records) == 1
     assert res.failed[0][0].endswith("tmmx_2019.nc")
     assert "404" in res.failed[0][1]
+
+
+def test_gridmet_manifest_survives_a_killed_build(lake_bucket, synthetic_gridmet, mocker):
+    """A CodeBuild timeout kills the process; files already uploaded must keep their lineage."""
+    ok = _fake_download(synthetic_gridmet)
+    calls = {"n": 0}
+
+    def download(url, dest, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise SystemExit("build timed out")
+        return ok(url, dest)
+
+    mocker.patch("ingest.gridmet.stream_download", side_effect=download)
+    try:
+        ingest_gridmet(["tmmx"], [2019, 2020])
+    except SystemExit:
+        pass
+    assert [r.s3_key for r in read_manifests()] == [gridmet_key("tmmx", 2019)]

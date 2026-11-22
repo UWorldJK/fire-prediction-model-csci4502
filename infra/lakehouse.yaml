@@ -18,6 +18,10 @@ Parameters:
   BudgetEmail:
     Type: String
     Description: Email that receives budget alerts.
+  AdminUserName:
+    Type: String
+    Default: fire-lakehouse-admin
+    Description: IAM user that runs deploy/ingest. Also blocked from new builds when the budget is exceeded.
   LandfireEmail:
     Type: String
     NoEcho: true
@@ -162,6 +166,7 @@ Resources:
       Description: Downloads raw data into bronze, integrates years, refreshes catalog and viewer.
       ServiceRole: !GetAtt FireLakehouseRole.Arn
       TimeoutInMinutes: 480
+      ConcurrentBuildLimit: 1
       Artifacts:
         Type: NO_ARTIFACTS
       Source:
@@ -225,6 +230,78 @@ Resources:
           Subscribers:
             - SubscriptionType: EMAIL
               Address: !Ref BudgetEmail
+
+  # Hard stop: when actual monthly spend passes the budget, deny new builds and
+  # Athena queries to the shared role, the team group and the admin user.
+  # Billing data lags several hours, so the per-build timeout above is the fast cap.
+  # To resume: AWS Budgets console > fire-lakehouse-monthly > Actions > reset.
+  StopSpendPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: fire-lakehouse-stop-spend
+      Description: Attached automatically by the budget action when spend exceeds the budget.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: StopSpend
+            Effect: Deny
+            Action:
+              - codebuild:StartBuild
+              - codebuild:RetryBuild
+              - athena:StartQueryExecution
+            Resource: "*"
+
+  BudgetActionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: budgets.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: apply-stop-spend
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:AttachGroupPolicy
+                  - iam:DetachGroupPolicy
+                  - iam:AttachUserPolicy
+                  - iam:DetachUserPolicy
+                Resource: "*"
+                Condition:
+                  ArnEquals:
+                    iam:PolicyARN: !Ref StopSpendPolicy
+
+  BudgetStopAction:
+    Type: AWS::Budgets::BudgetsAction
+    Properties:
+      BudgetName: !Ref MonthlyBudget
+      NotificationType: ACTUAL
+      ActionType: APPLY_IAM_POLICY
+      ActionThreshold:
+        Type: PERCENTAGE
+        Value: 100
+      ApprovalModel: AUTOMATIC
+      ExecutionRoleArn: !GetAtt BudgetActionRole.Arn
+      Definition:
+        IamActionDefinition:
+          PolicyArn: !Ref StopSpendPolicy
+          Roles:
+            - !Ref FireLakehouseRole
+          Groups:
+            - !Ref TeamGroup
+          Users:
+            - !Ref AdminUserName
+      Subscribers:
+        - Type: EMAIL
+          Address: !Ref BudgetEmail
 
 Outputs:
   BucketName:

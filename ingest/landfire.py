@@ -29,10 +29,13 @@ LFPS_URL = "https://lfps.usgs.gov/api/job"
 
 def job_payload(layers, tile_bbox, resolution_m: int, email: str) -> dict:
     west, south, east, north = tile_bbox
-    # No Output_Projection: LFPS then returns LANDFIRE's native Albers (EPSG:5070).
+    # Output_Projection is required: without it LFPS returns a custom Albers centered
+    # on each request, so every tile would have a different CRS. 5070 is LANDFIRE's
+    # CONUS Albers (NAD83), the projection its national products are published in.
     return {
         "Layer_List": ";".join(layers),
         "Area_of_Interest": f"{west} {south} {east} {north}",
+        "Output_Projection": "5070",
         "Resample_Resolution": resolution_m,
         "Email": email,
     }
@@ -69,6 +72,7 @@ def ingest_landfire(groups=None, tile_deg=None, resolution_m=None, force: bool =
     resolution_m = resolution_m or config.LANDFIRE_RESOLUTION_M
     result = IngestResult()
     sha = git_sha()
+    run_id = new_run_id()
 
     for group, layers in groups.items():
         for tile_id, tile_bbox in make_tiles(config.WEST_BBOX, tile_deg):
@@ -97,9 +101,10 @@ def ingest_landfire(groups=None, tile_deg=None, resolution_m=None, force: bool =
                                 bbox=list(tile_bbox), params=params, git_sha=sha,
                             )
                         )
+                write_manifest(result.records, "landfire", run_id)
                 log.info("landfire %s %s uploaded", group, tile_id)
             except Exception as err:
                 log.warning("landfire %s %s failed: %s", group, tile_id, err)
                 result.failed.append((prefix, f"{type(err).__name__}: {err}"))
-    write_manifest(result.records, "landfire", new_run_id())
+    write_manifest(result.records, "landfire", run_id)
     return result

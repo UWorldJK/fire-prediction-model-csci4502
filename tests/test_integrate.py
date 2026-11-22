@@ -109,3 +109,46 @@ def test_integrated_values_identical_to_raw(lake_bucket, synthetic_gridmet_facto
     raw = xr.open_dataset(s3.download_file(gridmet_key("tmmx", 2019)), mask_and_scale=False)
     z = _open()
     np.testing.assert_array_equal(z["tmmx"].values, raw["air_temperature"].values)
+
+
+def test_integrate_gridmet_recovers_from_interrupted_append(lake_bucket, synthetic_gridmet_factory):
+    _upload_raw(synthetic_gridmet_factory, [2019, 2020])
+    integrate_gridmet(["tmmx"], [2019])
+    # Simulate a crash mid-append: metadata and the day coordinate land, the data chunks don't.
+    url = f"s3://test-lake/{integrated_gridmet_key('tmmx')}"
+    integrate._year_dataset("tmmx", 2020).to_zarr(
+        url, append_dim="day", storage_options=s3fs_options(), consolidated=True, compute=False
+    )
+    res = integrate_gridmet(["tmmx"], [2019, 2020])
+    assert res.failed == []
+    z = _open()
+    days = pd.to_datetime(z["day"].values)
+    assert len(days) == 6 and days.is_unique and days.is_monotonic_increasing
+    raw = xr.open_dataset(s3.download_file(gridmet_key("tmmx", 2020)), mask_and_scale=False)
+    name = next(v for v in raw.data_vars if v != "crs")
+    got = z["tmmx"].sel(day=z.day.dt.year == 2020).values
+    np.testing.assert_array_equal(got, raw[name].values)
+
+
+def test_integrate_gridmet_store_without_completion_marker_is_rebuilt(lake_bucket, synthetic_gridmet_factory, mocker):
+    _upload_raw(synthetic_gridmet_factory, [2019])
+    integrate_gridmet(["tmmx"], [2019])
+    s3.config.client("s3").delete_object(Bucket="test-lake", Key=integrate._marker_key("tmmx"))
+    spy = mocker.spy(integrate, "_rebuild_gridmet")
+    integrate_gridmet(["tmmx"], [2019])
+    assert spy.call_count == 1
+
+
+def test_integrate_landfire_rebuilds_when_new_tiles_arrive(lake_bucket, tmp_path):
+    from lakehouse.config import landfire_key
+    from tests.conftest import TOPO_DESCRIPTIONS, _write_tile
+
+    a = _write_tile(tmp_path / "a.tif", -2000000.0, 2000000.0, 4, 3, 100, TOPO_DESCRIPTIONS)
+    s3.upload_file(a, landfire_key("topo", "r0c0", "ja.tif"))
+    integrate_landfire(["LF2020_SlpD"])
+    b = _write_tile(tmp_path / "b.tif", -2000000.0 + 4 * 90.0, 2000000.0, 4, 3, 200, TOPO_DESCRIPTIONS)
+    s3.upload_file(b, landfire_key("topo", "r0c1", "jb.tif"))
+    res = integrate_landfire(["LF2020_SlpD"])
+    assert res.skipped == []
+    with rasterio.open(s3.download_file(integrated_landfire_key("LF2020_SlpD"), revalidate=True)) as src:
+        assert src.width == 8

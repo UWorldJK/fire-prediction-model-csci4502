@@ -98,3 +98,22 @@ def test_reader_access_denied_raises_helpful_error(lake_bucket, mocker):
     mocker.patch("lakehouse.s3.download_file", side_effect=err)
     with pytest.raises(LakehouseAuthError, match="AWS_PROFILE=fire-lakehouse"):
         read_mtbs("2026-11-21")
+
+
+def test_open_gridmet_missing_year_in_lake_raises_value_error(lake_bucket, synthetic_gridmet):
+    s3.upload_file(synthetic_gridmet, gridmet_key("tmmx", 2020))
+    with pytest.raises(ValueError, match="2019.*not in the lake yet.*2020"):
+        open_gridmet("tmmx", years=[2019, 2020])
+
+
+def test_open_landfire_layer_not_integrated_yet_raises_value_error(lake_bucket):
+    with pytest.raises(ValueError, match="LF2024_CC.*not in the lake yet"):
+        open_landfire("LF2024_CC")
+
+
+def test_read_mtbs_unknown_snapshot_raises_value_error(lake_bucket, synthetic_mtbs, tmp_path):
+    p = tmp_path / "m.parquet"
+    synthetic_mtbs.to_parquet(p)
+    s3.upload_file(p, mtbs_key("2026-11-21", "mtbs_perimeters_west.parquet"))
+    with pytest.raises(ValueError, match="2001-01-01.*2026-11-21"):
+        read_mtbs("2001-01-01")

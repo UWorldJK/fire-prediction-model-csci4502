@@ -1,6 +1,6 @@
 """Register bronze in the Glue Data Catalog so Athena can query it.
 
-- sql/*.sql run in name order (the lineage manifest table and the inventory view).
+- sql/*.sql run in name order (numbered prefixes: tables before the views on them).
   ${bucket} in each file is replaced with the lake bucket.
 - MTBS Parquet folders are registered from their own Parquet schema.
 

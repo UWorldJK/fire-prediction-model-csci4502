@@ -16,7 +16,10 @@ import re
 import tempfile
 from pathlib import Path
 
+import hashlib
+
 import geopandas as gpd
+from botocore.exceptions import ClientError
 import pandas as pd
 import rasterio
 import rasterio.merge
@@ -68,11 +71,53 @@ def _store_exists(var: str) -> bool:
     return bool(s3.list_keys(config.integrated_gridmet_key(var) + "/"))
 
 
-def _integrated_years(var: str) -> list[int]:
+# Written after each year lands. A store whose contents disagree with it was cut off
+# mid-write (CodeBuild timeout, OOM, S3 error) and is rebuilt.
+# Lives next to the store (not inside it, where Zarr would warn about a foreign key).
+
+
+def _marker_key(var: str) -> str:
+    return f"{config.integrated_gridmet_key(var)}.complete.json"
+
+
+def _read_marker(var: str) -> list[int] | None:
+    try:
+        body = config.client("s3").get_object(Bucket=config.bucket(), Key=_marker_key(var))["Body"].read()
+    except ClientError as err:
+        if err.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
+            return None
+        raise
+    return sorted(json.loads(body)["years"])
+
+
+def _write_marker(var: str, years: list[int]) -> None:
+    config.client("s3").put_object(
+        Bucket=config.bucket(), Key=_marker_key(var), Body=json.dumps({"years": sorted(years)}).encode(),
+        ContentType="application/json",
+    )
+
+
+def _integrated_years(var: str) -> list[int] | None:
+    """Years fully written to the store: [] if there is no store, None if it is inconsistent."""
     if not _store_exists(var):
         return []
-    with xr.open_zarr(_s3_url(config.integrated_gridmet_key(var)), storage_options=config.s3fs_options()) as z:
-        return sorted(set(pd.to_datetime(z["day"].values).year))
+    done = _read_marker(var)
+    if done is None:
+        return None
+    try:
+        # consolidated=False reads each array's own metadata, which a half-finished append resizes.
+        with xr.open_zarr(_s3_url(config.integrated_gridmet_key(var)), storage_options=config.s3fs_options(),
+                          consolidated=False) as z:
+            days = pd.to_datetime(z["day"].values)
+            sizes_ok = all(z[v].sizes.get("day", len(days)) == len(days) for v in z.data_vars)
+    except Exception as err:  # unreadable metadata: rebuild rather than fail forever
+        log.warning("integrated gridmet %s unreadable (%s); will rebuild", var, err)
+        return None
+    if not (sizes_ok and days.is_unique and days.is_monotonic_increasing):
+        return None
+    if sorted(set(days.year)) != done:
+        return None
+    return done
 
 
 def _year_dataset(var: str, year: int) -> xr.Dataset:
@@ -108,16 +153,26 @@ def _delete_prefix(prefix: str) -> None:
         )
 
 
+def _write_years(var: str, years: list[int], done: list[int]) -> None:
+    """Write `years` after the already-complete `done`, marking each one complete as it lands."""
+    done = list(done)
+    for year in years:
+        _write_year(var, year, first=not done)
+        done.append(year)
+        _write_marker(var, done)
+
+
 def _rebuild_gridmet(var: str, years: list[int]) -> None:
+    config.client("s3").delete_object(Bucket=config.bucket(), Key=_marker_key(var))
     _delete_prefix(config.integrated_gridmet_key(var) + "/")
-    for i, year in enumerate(years):
-        _write_year(var, year, first=(i == 0))
+    _write_years(var, years, [])
 
 
 def integrate_gridmet(variables=None, years=None, force: bool = False) -> IngestResult:
     variables = list(variables or config.GRIDMET_VARS)
     wanted_years = set(years if years is not None else config.gridmet_years())
     result = IngestResult()
+    run_id = new_run_id()
     for var in variables:
         key = config.integrated_gridmet_key(var)
         try:
@@ -129,9 +184,8 @@ def integrate_gridmet(variables=None, years=None, force: bool = False) -> Ingest
             if have == want and not force:
                 result.skipped.append(key)
                 continue
-            if not force and want[: len(have)] == have:
-                for year in want[len(have):]:
-                    _write_year(var, year, first=not have and year == want[0])
+            if not force and have is not None and want[: len(have)] == have:
+                _write_years(var, want[len(have):], have)
                 action = "append"
             else:
                 _rebuild_gridmet(var, want)
@@ -140,11 +194,12 @@ def integrate_gridmet(variables=None, years=None, force: bool = False) -> Ingest
                 _record("integrated_gridmet", key, f"bronze/gridmet/variable={var}/",
                         {"variable": var, "years": [want[0], want[-1]], "action": action})
             )
+            write_manifest(result.records, "integrated_gridmet", run_id)
             log.info("integrated gridmet %s %s-%s (%s)", var, want[0], want[-1], action)
         except Exception as err:
             log.warning("integrate gridmet %s failed: %s", var, err)
             result.failed.append((key, f"{type(err).__name__}: {err}"))
-    write_manifest(result.records, "integrated_gridmet", new_run_id())
+    write_manifest(result.records, "integrated_gridmet", run_id)
     return result
 
 
@@ -190,9 +245,29 @@ def _band_for(src, layer: str, fallback: int) -> int:
     return fallback
 
 
-def _mosaic_layer(layer: str, dest: Path) -> int:
+def _layer_tiles(layer: str) -> list[str]:
+    group, _ = config.layer_location(layer)
+    return [k for k in s3.list_keys(f"bronze/landfire/group={group}/") if k.endswith(".tif")]
+
+
+def _tiles_digest(tiles: list[str]) -> str:
+    return hashlib.sha256("\n".join(sorted(tiles)).encode()).hexdigest()
+
+
+def _cog_is_current(key: str, tiles: list[str]) -> bool:
+    """True if the COG exists and was built from exactly these tiles (tracked in S3 metadata)."""
+    try:
+        head = config.client("s3").head_object(Bucket=config.bucket(), Key=key)
+    except ClientError as err:
+        if err.response["Error"]["Code"] in ("404", "NoSuchKey", "NotFound"):
+            return False
+        raise
+    return head.get("Metadata", {}).get("tiles-sha256") == _tiles_digest(tiles)
+
+
+def _mosaic_layer(layer: str, dest: Path, tiles: list[str] | None = None) -> int:
     group, band = config.layer_location(layer)
-    tiles = [k for k in s3.list_keys(f"bronze/landfire/group={group}/") if k.endswith(".tif")]
+    tiles = tiles if tiles is not None else _layer_tiles(layer)
     if not tiles:
         raise FileNotFoundError(f"no LANDFIRE tiles for group {group}")
     sources = [rasterio.open(s3.download_file(k)) for k in tiles]
@@ -221,28 +296,34 @@ def _mosaic_layer(layer: str, dest: Path) -> int:
 def integrate_landfire(layers=None, force: bool = False) -> IngestResult:
     layers = list(layers or [name for group in config.LANDFIRE_GROUPS.values() for name in group])
     result = IngestResult()
+    run_id = new_run_id()
     for layer in layers:
         key = config.integrated_landfire_key(layer)
-        if not force and s3.object_exists(key):
-            result.skipped.append(key)
-            continue
         try:
+            tiles = _layer_tiles(layer)
+            if not force and _cog_is_current(key, tiles):
+                result.skipped.append(key)
+                continue
             group, _ = config.layer_location(layer)
             with tempfile.TemporaryDirectory() as tmp:
                 out = Path(tmp) / f"{layer}.tif"
-                n_tiles = _mosaic_layer(layer, out)
-                s3.upload_file(out, key, content_type="image/tiff")
+                n_tiles = _mosaic_layer(layer, out, tiles)
+                s3.upload_file(out, key, content_type="image/tiff",
+                               metadata={"tiles-sha256": _tiles_digest(tiles)})
                 result.records.append(
                     _record("integrated_landfire", key, f"bronze/landfire/group={group}/",
                             {"layer": layer, "group": group, "tiles": n_tiles},
                             sha256=s3.sha256_file(out), nbytes=out.stat().st_size)
                 )
+            write_manifest(result.records, "integrated_landfire", run_id)
         except Exception as err:
             log.warning("integrate landfire %s failed: %s", layer, err)
             result.failed.append((key, f"{type(err).__name__}: {err}"))
-    write_manifest(result.records, "integrated_landfire", new_run_id())
+    write_manifest(result.records, "integrated_landfire", run_id)
     return result
 
 
-def integrate_all() -> IngestResult:
-    return integrate_gridmet().merge(integrate_mtbs()).merge(integrate_landfire())
+def integrate_all(force: bool = False) -> IngestResult:
+    return (
+        integrate_gridmet(force=force).merge(integrate_mtbs()).merge(integrate_landfire(force=force))
+    )

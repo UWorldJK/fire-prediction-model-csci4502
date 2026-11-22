@@ -33,6 +33,10 @@ def new_run_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+# deploy.sh writes the commit into the CodeBuild bundle, which has no .git.
+_BUNDLE_SHA_FILE = Path(__file__).resolve().parent.parent / "GIT_SHA"
+
+
 def git_sha() -> str:
     if os.environ.get("GIT_SHA"):
         return os.environ["GIT_SHA"]
@@ -42,10 +46,18 @@ def git_sha() -> str:
         )
         return out.stdout.strip()
     except (OSError, subprocess.SubprocessError):
-        return "unknown"
+        pass
+    if _BUNDLE_SHA_FILE.exists():
+        return _BUNDLE_SHA_FILE.read_text().strip() or "unknown"
+    return "unknown"
 
 
 def write_manifest(records: list[ManifestRecord], source: str, run_id: str) -> str | None:
+    """Write all records of one run to one JSONL object (rewritten as the run grows).
+
+    Ingest calls this after every object it uploads, so a build killed by its
+    timeout still leaves lineage for everything it finished.
+    """
     if not records:
         return None
     key = config.manifest_key(source, run_id)

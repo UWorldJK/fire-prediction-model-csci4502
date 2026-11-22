@@ -50,6 +50,24 @@ def _auth_errors(fn):
     return wrapper
 
 
+def _is_missing(err: botocore.exceptions.ClientError) -> bool:
+    return err.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound")
+
+
+def _fetch(key: str, what: str, available, revalidate: bool = False):
+    """download_file, but a missing object is a ValueError naming what *is* in the lake."""
+    try:
+        return s3.download_file(key, revalidate=revalidate)
+    except botocore.exceptions.ClientError as err:
+        if not _is_missing(err):
+            raise
+        have = available()
+        raise ValueError(
+            f"{what} is not in the lake yet. Available: {', '.join(map(str, have)) or 'nothing yet'} "
+            "(open the viewer: python -m lakehouse.viewer)."
+        ) from None
+
+
 def _session() -> boto3.Session:
     return boto3.Session(region_name=config.REGION)
 
@@ -91,7 +109,23 @@ def _open_gridmet_integrated(var: str, years: list[int]) -> xr.Dataset | None:
     return z.sel(day=pd.to_datetime(z["day"].values).year.isin(years))
 
 
+def _gridmet_years_in_lake(var: str) -> list[int]:
+    years = set()
+    for key in s3.list_keys(f"bronze/gridmet/variable={var}/"):
+        part = key.split("/year=")
+        if len(part) > 1:
+            years.add(int(part[1][:4]))
+    return sorted(years)
+
+
 def _open_gridmet_raw(var: str, years: list[int]) -> xr.Dataset:
+    have = _gridmet_years_in_lake(var)
+    missing = [y for y in years if y not in have]
+    if missing:
+        raise ValueError(
+            f"gridMET {var} years {missing} are not in the lake yet. Available: "
+            f"{', '.join(map(str, have)) or 'nothing yet'} (open the viewer: python -m lakehouse.viewer)."
+        )
     parts = []
     for year in years:
         ds = xr.open_dataset(s3.download_file(config.gridmet_key(var, year)))
@@ -127,19 +161,30 @@ def open_gridmet(variables, years: Iterable[int] | None = None, bbox=None) -> xr
 def read_mtbs(snapshot: str | None = None) -> gpd.GeoDataFrame:
     """MTBS perimeters (source CRS EPSG:4269). Default: all years integrated and deduplicated."""
     if snapshot is None:
-        path = s3.download_file(config.INTEGRATED_MTBS_KEY, revalidate=True)
+        path = _fetch(config.INTEGRATED_MTBS_KEY, "Integrated MTBS", _mtbs_snapshots, revalidate=True)
     else:
-        path = s3.download_file(config.mtbs_key(snapshot, "mtbs_perimeters_west.parquet"))
+        path = _fetch(config.mtbs_key(snapshot, "mtbs_perimeters_west.parquet"),
+                      f"MTBS snapshot {snapshot}", _mtbs_snapshots)
     return gpd.read_parquet(path)
 
 
+def _mtbs_snapshots() -> list[str]:
+    return sorted({k.split("snapshot=")[1].split("/")[0] for k in s3.list_keys("bronze/mtbs/snapshot=")})
+
+
 # ---------------- LANDFIRE ----------------
+
+def _landfire_layers_in_lake() -> list[str]:
+    return [k.rsplit("/", 1)[1].removesuffix(".tif") for k in s3.list_keys("bronze/integrated/landfire/")
+            if k.endswith(".tif")]
+
 
 @_auth_errors
 def open_landfire(layer: str, bbox=None) -> xr.DataArray:
     """One LANDFIRE layer mosaicked over the western US (EPSG:5070). bbox in lon/lat."""
     config.layer_location(layer)  # raises ValueError listing available layers
-    path = s3.download_file(config.integrated_landfire_key(layer), revalidate=True)
+    path = _fetch(config.integrated_landfire_key(layer), f"LANDFIRE layer {layer}", _landfire_layers_in_lake,
+                  revalidate=True)
     da = rioxarray.open_rasterio(path, masked=True).squeeze("band", drop=True)
     da.name = layer
     if bbox is not None:

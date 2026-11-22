@@ -25,6 +25,11 @@ BUCKET=$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$REG
 # CodeBuild runs whatever is committed at HEAD: commit before deploying code changes.
 BUNDLE=$(mktemp -t ingest).zip
 git archive --format=zip -o "$BUNDLE" HEAD lakehouse ingest sql requirements-ingest.txt
+# The bundle has no .git: record the commit so lineage rows carry a real git_sha.
+SHA_DIR=$(mktemp -d)
+git rev-parse HEAD > "$SHA_DIR/GIT_SHA"
+(cd "$SHA_DIR" && zip -q "$BUNDLE" GIT_SHA)
+rm -rf "$SHA_DIR"
 aws s3 cp "$BUNDLE" "s3://$BUCKET/_code/ingest.zip" --region "$REGION" --profile "$PROFILE"
 rm -f "$BUNDLE"
 
