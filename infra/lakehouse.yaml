@@ -1,0 +1,322 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Western US fire lakehouse (CSCI4502). Serverless: S3 (bronze raw + integrated,
+  silver cleaned), Glue Data Catalog, Athena, CodeBuild ingest job, one shared
+  IAM role, and a monthly budget alert. Deploy with infra/deploy.sh.
+
+Parameters:
+  StudyStartYear:
+    Type: Number
+    Default: 2002
+    MinValue: 1984
+    Description: First study year (MTBS starts 1984). gridMET also pulls the year before.
+  StudyEndYear:
+    Type: Number
+    Default: 2025
+    MaxValue: 2025
+    Description: Last complete study year.
+  BudgetEmail:
+    Type: String
+    Description: Email that receives budget alerts.
+  AdminUserName:
+    Type: String
+    Default: fire-lakehouse-admin
+    Description: IAM user that runs deploy/ingest. Also blocked from new builds when the budget is exceeded.
+  LandfireEmail:
+    Type: String
+    NoEcho: true
+    Description: Email required by the LANDFIRE Product Service for each job.
+
+Resources:
+  LakeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub fire-lakehouse-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-athena-results
+            Status: Enabled
+            Prefix: athena-results/
+            ExpirationInDays: 7
+          - Id: abort-incomplete-multipart
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+
+  LakeDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: fire_lakehouse
+        Description: Bronze (raw + integrated) and silver tables for the fire lakehouse.
+
+  LakeWorkGroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: fire-lakehouse
+      RecursiveDeleteOption: true
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        BytesScannedCutoffPerQuery: 10737418240
+        EngineVersion:
+          SelectedEngineVersion: Athena engine version 3
+        ResultConfiguration:
+          OutputLocation: !Sub s3://${LakeBucket}/athena-results/
+
+  IngestLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/codebuild/fire-lakehouse-ingest
+      RetentionInDays: 7
+
+  FireLakehouseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: FireLakehouseRole
+      MaxSessionDuration: 43200
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: sts:AssumeRole
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: fire-lakehouse-full-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: S3Lake
+                Effect: Allow
+                Action: s3:*
+                Resource:
+                  - !GetAtt LakeBucket.Arn
+                  - !Sub ${LakeBucket.Arn}/*
+              - Sid: GlueCatalog
+                Effect: Allow
+                Action: glue:*
+                Resource:
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/fire_lakehouse
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/fire_lakehouse/*
+              - Sid: AthenaWorkGroup
+                Effect: Allow
+                Action: athena:*
+                Resource: !Sub arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/fire-lakehouse
+              - Sid: AthenaList
+                Effect: Allow
+                Action:
+                  - athena:ListWorkGroups
+                  - athena:GetDataCatalog
+                  - athena:ListDataCatalogs
+                Resource: "*"
+              - Sid: IngestBuilds
+                Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                Resource: !Sub arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/fire-lakehouse-ingest
+              - Sid: IngestLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:GetLogEvents
+                  - logs:FilterLogEvents
+                  - logs:DescribeLogStreams
+                Resource:
+                  - !GetAtt IngestLogGroup.Arn
+                  - !Sub ${IngestLogGroup.Arn}:log-stream:*
+              - Sid: ReadStackConfig
+                Effect: Allow
+                Action: cloudformation:DescribeStacks
+                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*
+
+  TeamGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: fire-lakehouse-team
+      Policies:
+        - PolicyName: assume-fire-lakehouse-role
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource: !GetAtt FireLakehouseRole.Arn
+
+  IngestProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: fire-lakehouse-ingest
+      Description: Downloads raw data into bronze, integrates years, refreshes catalog and viewer.
+      ServiceRole: !GetAtt FireLakehouseRole.Arn
+      TimeoutInMinutes: 480
+      ConcurrentBuildLimit: 1
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Source:
+        Type: S3
+        Location: !Sub ${LakeBucket}/_code/ingest.zip
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.12
+              commands:
+                - pip install -r requirements-ingest.txt
+            build:
+              commands:
+                - python -m ingest $INGEST_TARGET
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux-x86_64-standard:5.0
+        EnvironmentVariables:
+          - Name: FIRE_LAKEHOUSE_BUCKET
+            Value: !Ref LakeBucket
+          - Name: STUDY_START_YEAR
+            Value: !Ref StudyStartYear
+          - Name: STUDY_END_YEAR
+            Value: !Ref StudyEndYear
+          - Name: LANDFIRE_EMAIL
+            Value: !Ref LandfireEmail
+          - Name: INGEST_TARGET
+            Value: all
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref IngestLogGroup
+
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: fire-lakehouse-monthly
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: 5
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref BudgetEmail
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref BudgetEmail
+
+  # Hard stop: when actual monthly spend passes the budget, deny new builds and
+  # Athena queries to the shared role, the team group and the admin user.
+  # Billing data lags several hours, so the per-build timeout above is the fast cap.
+  # To resume: AWS Budgets console > fire-lakehouse-monthly > Actions > reset.
+  StopSpendPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: fire-lakehouse-stop-spend
+      Description: Attached automatically by the budget action when spend exceeds the budget.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: StopSpend
+            Effect: Deny
+            Action:
+              - codebuild:StartBuild
+              - codebuild:RetryBuild
+              - athena:StartQueryExecution
+            Resource: "*"
+
+  BudgetActionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: budgets.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: apply-stop-spend
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:AttachGroupPolicy
+                  - iam:DetachGroupPolicy
+                  - iam:AttachUserPolicy
+                  - iam:DetachUserPolicy
+                Resource: "*"
+                Condition:
+                  ArnEquals:
+                    iam:PolicyARN: !Ref StopSpendPolicy
+
+  BudgetStopAction:
+    Type: AWS::Budgets::BudgetsAction
+    Properties:
+      BudgetName: !Ref MonthlyBudget
+      NotificationType: ACTUAL
+      ActionType: APPLY_IAM_POLICY
+      ActionThreshold:
+        Type: PERCENTAGE
+        Value: 100
+      ApprovalModel: AUTOMATIC
+      ExecutionRoleArn: !GetAtt BudgetActionRole.Arn
+      Definition:
+        IamActionDefinition:
+          PolicyArn: !Ref StopSpendPolicy
+          Roles:
+            - !Ref FireLakehouseRole
+          Groups:
+            - !Ref TeamGroup
+          Users:
+            - !Ref AdminUserName
+      Subscribers:
+        - Type: EMAIL
+          Address: !Ref BudgetEmail
+
+Outputs:
+  BucketName:
+    Value: !Ref LakeBucket
+  RoleArn:
+    Value: !GetAtt FireLakehouseRole.Arn
+  Database:
+    Value: fire_lakehouse
+  WorkGroup:
+    Value: !Ref LakeWorkGroup
+  TeamGroup:
+    Value: !Ref TeamGroup
+  IngestProject:
+    Value: !Ref IngestProject
+  StudyStartYear:
+    Value: !Ref StudyStartYear
+  StudyEndYear:
+    Value: !Ref StudyEndYear

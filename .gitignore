@@ -1,2 +1,10 @@
 data/*
 ipynb_checkpoints
+.venv/
+.cache/
+GIT_SHA
+__pycache__/
+
+# Superpowers plans and ledgers (local only)
+docs/superpowers/
+.superpowers/

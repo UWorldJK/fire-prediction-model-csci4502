@@ -1,10 +1,10 @@
+-r requirements-ingest.txt
+# analysis / modeling
 pandas
-packaging
-netCDF4
+numpy
 scipy
+packaging
 pydap
-h5netcdf
-zarr
 cftime
 iris
 bottleneck
@@ -15,9 +15,4 @@ seaborn
 nc-time-axis
 sparse
 pint
-numpy
-xarray
-geopandas 
-rasterio 
-rioxarray
-geopandas
+scikit-learn

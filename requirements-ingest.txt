@@ -1,0 +1,15 @@
+# Minimal runtime for ingest/integrate (installed by CodeBuild)
+boto3
+s3fs>=2025.9  # older s3fs (0.4.x) breaks zarr 3; pip backtracks to it without a floor
+awswrangler
+requests
+xarray
+netCDF4
+h5netcdf
+zarr
+dask  # lazy, chunked reads of the integrated Zarr stores
+geopandas
+pyarrow
+shapely
+rasterio
+rioxarray

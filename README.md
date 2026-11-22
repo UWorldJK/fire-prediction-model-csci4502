@@ -2,6 +2,24 @@
 
 Group project for CSCI4502
 
+## Getting the data
+
+All data lives in an AWS lakehouse (S3 + Glue + Athena), western US only, 2002-2025:
+gridMET, MTBS and LANDFIRE. Nothing is downloaded by hand anymore.
+
+```bash
+pip install -r requirements.txt
+export AWS_PROFILE=fire-lakehouse
+python -m lakehouse.viewer          # see what's in the lake
+```
+
+```python
+from lakehouse import open_gridmet, read_mtbs, open_landfire, query
+```
+
+Setup, reading, writing cleaned (silver) data and the data dictionary:
+[docs/lakehouse.md](docs/lakehouse.md). Infrastructure: `infra/`. Ingest code: `ingest/`.
+
 ## A Closer Look at Our Data:
 
 ## gridMET
