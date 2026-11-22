@@ -2,6 +2,8 @@
 
 Group project for CSCI4502
 
+Jacob Kurry + Team
+
 ## Getting the data
 
 All data lives in an AWS lakehouse (S3 + Glue + Athena), western US only, 2002-2025:
