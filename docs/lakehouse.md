@@ -177,6 +177,49 @@ Rules:
 - Never write to `bronze/`. Bronze is rebuilt only by the ingest job, and silver
   must always be reproducible from it.
 
+## 5b. Regions (per-region training data)
+
+State lines come from Natural Earth through cartopy (already in `requirements.txt`; the
+first call downloads a few MB and caches it). Fires don't need them at all: the MTBS
+`event_id` starts with the state code. `lakehouse.regions` groups states into regions:
+
+| Scheme | Regions |
+|---|---|
+| `state` | one per state: `california`, `colorado`, `arizona`, ... |
+| `gacc` | NIFC coordination areas on state lines: `northwest` (WA, OR), `california`, `great_basin` (NV, UT, ID), `northern_rockies` (MT), `rocky_mountain` (CO, WY), `southwest` (AZ, NM) |
+| `macro` | `pacific_coast`, `intermountain`, `rockies`, `southwest` |
+| a dict | your own, e.g. `{"CA": "coast", "OR": "coast", "CO": "rockies"}` |
+
+Plains/Texas slivers inside the bbox (TX, OK, KS, NE, SD, ND) fold into the nearest region.
+
+```python
+from lakehouse import open_gridmet, read_silver
+from lakehouse.regions import read_states, region_bbox, subset_region, region_mask
+
+co_box = region_bbox("colorado")                       # pass to any reader
+wx = open_gridmet(["erc", "vpd"], years=[2020], bbox=co_box)
+co_wx = subset_region(wx, "colorado")                  # NaN outside the state line
+```
+
+Build the silver tables (fires are cleaned once; training rows are 1 = fire,
+0 = random unburned cell-day in the same region, dates drawn from that region's fires,
+weather from the 7 days *before* the date):
+
+```bash
+python -m cleaning.build_regions fires                                   # silver_mtbs_fires_regions
+python -m cleaning.build_regions training --scheme state --regions california colorado
+python -m cleaning.build_regions training --scheme gacc --years 2010-2025
+python -m cleaning.build_regions training --regions colorado --out-dir out/   # local only
+```
+
+```python
+train = read_silver("training_state")
+co = train[train.region == "colorado"]
+```
+
+Split train/test **by year** (or spatial blocks), not randomly: neighbouring cell-days
+share weather, so a random split overstates accuracy.
+
 ## 6. Changing study years
 
 The years are CloudFormation parameters (`StudyStartYear`, `StudyEndYear`). The
