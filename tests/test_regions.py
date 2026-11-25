@@ -248,3 +248,22 @@ def test_read_states_from_natural_earth(mocker, tmp_path, states):
     regions._STATES_CACHE.clear()
     assert sorted(got["state"]) == ["AZ", "CA", "CO", "NM", "NV", "UT"]  # FL, Canada, Mexico dropped
     assert got.crs.to_epsg() == 4326
+
+
+def test_cli_out_dir_rerun_replaces_region(mocker, tmp_path, wx, states):
+    from cleaning import build_regions as br
+
+    mocker.patch.object(regions, "read_states", return_value=states)
+    mocker.patch("lakehouse.read_mtbs", return_value=_fires())
+    mocker.patch("lakehouse.open_gridmet",
+                 side_effect=lambda v, years, bbox: wx[[x for x in v if x in wx]])
+    args = ["training", "--regions", "colorado", "--no-landfire", "--out-dir", str(tmp_path)]
+    assert br.main(args) == 0
+    first = len(pd.read_parquet(tmp_path / "training_state"))
+    assert br.main(args) == 0
+    assert len(pd.read_parquet(tmp_path / "training_state")) == first  # no duplicates
+    assert br.main(["fires", "--out-dir", str(tmp_path)]) == 0
+    assert br.main(["fires", "--out-dir", str(tmp_path)]) == 0
+    assert len(pd.read_parquet(tmp_path / "mtbs_fires_regions")) == 4
+    fires = gpd.read_parquet(tmp_path / "mtbs_fires_regions")
+    assert fires.geometry.notna().all() and set(fires["state"]) == {"CO", "CA", "AZ"}

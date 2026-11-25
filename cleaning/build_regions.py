@@ -80,7 +80,7 @@ def clean_mtbs(fires: gpd.GeoDataFrame, states: gpd.GeoDataFrame | None = None,
     df["lon"], df["lat"] = centroid.x.values, centroid.y.values
     df["year"] = df["ig_date"].dt.year.astype("int32")
     df["month"] = df["ig_date"].dt.month.astype("int8")
-    df["doy"] = df["ig_date"].dt.dayofyear.astype("int16")
+    df["doy"] = df["ig_date"].dt.day_of_year.astype("int16")
     df["log_acres"] = np.log1p(df["burnbndac"])
     for name in regions.SCHEMES:
         df[f"region_{name}"] = df["state"].map(regions.SCHEMES[name])
@@ -317,9 +317,22 @@ def main(argv=None) -> int:
     def save(df, name, partition_cols, mode="overwrite"):
         if args.out_dir:
             from pathlib import Path
+            import shutil
+
             path = Path(args.out_dir) / name
             path.mkdir(parents=True, exist_ok=True)
-            df.to_parquet(path, partition_cols=partition_cols)
+            if mode == "overwrite":
+                shutil.rmtree(path)
+            else:  # replace only the partitions being written, like silver
+                for values in df[partition_cols].drop_duplicates().itertuples(index=False):
+                    part = path.joinpath(*(f"{c}={v}" for c, v in zip(partition_cols, values)))
+                    shutil.rmtree(part, ignore_errors=True)
+            # one file per partition folder (works for GeoDataFrames too, which keep geometry)
+            for values, group in df.groupby(partition_cols, dropna=False):
+                values = values if isinstance(values, tuple) else (values,)
+                part = path.joinpath(*(f"{c}={v}" for c, v in zip(partition_cols, values)))
+                part.mkdir(parents=True, exist_ok=True)
+                group.drop(columns=partition_cols).to_parquet(part / "part-0.parquet", index=False)
             print(f"wrote {len(df)} rows to {path}")
         else:
             print(f"wrote {len(df)} rows to silver table {write_silver(df, name, partition_cols, mode=mode)}")
