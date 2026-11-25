@@ -7,6 +7,7 @@ import xarray as xr
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
+from feature_engineering import extract_window_features
 
 
 class WildfireClassifier:
@@ -18,15 +19,7 @@ class WildfireClassifier:
         self.feature_cols = None
 
     def _extract_features(self, ds, lat, lon, date, window_days=7):
-        end = pd.Timestamp(date)
-        start = end - pd.Timedelta(days=window_days)
-        try:
-            window = ds.sel(
-                lat=lat, lon=lon, method="nearest"
-            ).sel(day=slice(str(start.date()), str(end.date())))
-            return {var: float(window[var].mean()) for var in ds.data_vars}
-        except Exception:
-            return None
+        return extract_window_features(ds, lat, lon, date, window_days=window_days)
 
     def build_features(self):
         print("Loading data...")
@@ -39,9 +32,14 @@ class WildfireClassifier:
         lon_min, lon_max = float(ds.lon.min()), float(ds.lon.max())
 
         rows = []
+        
+        all_dates = pd.to_datetime(ds.day.values)
+        date_min = all_dates.min()
 
         print(f"Extracting features for {len(fires)} fires...")
         for _, fire in fires.iterrows():
+            if fire["ig_date"] < date_min + pd.Timedelta(days=90):
+                continue
             centroid = fire.geometry.centroid
             feats = self._extract_features(ds, centroid.y, centroid.x, fire["ig_date"])
             if feats:
